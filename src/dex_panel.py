@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
 from dex_session import LocationView
 from dex_tracker import display_order
 from game_time import season_name
+from lang import LangPack
 from overlay import DOCK_MARGIN, DOCK_SIDE, DOCK_TOP_OFFSET, MIN_SCALE, phys_to_logical
 from sprite_loader import SpriteLoader
 
@@ -142,9 +143,19 @@ class _ClickRow(QWidget):
         self._on_click(self._index)
 
 
+def display_title(name: str) -> str:
+    """The zone name for the panel header. The bundled data has ALL-CAPS names, shown
+    title-cased; a language pack's names already carry their own casing ("Forêt de
+    Jade") and are left alone (title() would give "Forêt De Jade")."""
+    letters = [c for c in name if c.isalpha()]
+    mostly_caps = bool(letters) and sum(c.isupper() for c in letters) >= 0.7 * len(letters)
+    return name.title() if mostly_caps else name
+
+
 class DexPanel(QWidget):
-    def __init__(self, loader: SpriteLoader | None = None) -> None:
+    def __init__(self, loader: SpriteLoader | None = None, lang: LangPack | None = None) -> None:
         super().__init__()
+        self._lang = lang or LangPack()
         self._loader = loader or SpriteLoader()
         self._scale = 0.0
         self._panel_w = BASE_PANEL_W
@@ -212,13 +223,15 @@ class DexPanel(QWidget):
         self._bar = QHBoxLayout()
         self._bar.addStretch(1)
         self._profile_btn = QPushButton()
-        self._profile_btn.setToolTip("Profiles: create / load / delete")
+        self._profile_btn.setToolTip(
+            self._lang.text("tip_profiles", "Profiles: create / load / delete")
+        )
         self._profile_btn.clicked.connect(self._toggle_profiles)
         self._balls_btn = QPushButton()
-        self._balls_btn.setToolTip("Choose which balls to show")
+        self._balls_btn.setToolTip(self._lang.text("tip_balls", "Choose which balls to show"))
         self._balls_btn.clicked.connect(self._toggle_balls)
         self._info_btn = QPushButton()
-        self._info_btn.setToolTip("Rarity colour legend")
+        self._info_btn.setToolTip(self._lang.text("tip_legend", "Rarity colour legend"))
         self._info_btn.clicked.connect(self._toggle_legend)
         for b in (self._profile_btn, self._balls_btn, self._info_btn):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -297,15 +310,29 @@ class DexPanel(QWidget):
             self._clear_row_sprite(r)  # force reload at the new sprite size
         self._last_pos = None
 
+    def _set_subtitle(self, text: str) -> None:
+        """Show the subtitle, shrinking its font (down to 8 px at scale 1.0) when a long
+        translation ("Sinnoh · Matin · Printemps · 12 à capturer") would overflow the
+        fixed-width panel. Text that fits keeps the normal size."""
+        avail = self._panel_w - 2 * self._px(BASE_MARGIN_X)
+        size = self._px(BASE_SUB_PX)
+        floor = max(self._px(8), 6)
+        while size > floor and QFontMetrics(self._font(size)).horizontalAdvance(text) > avail:
+            size -= 1
+        self._subtitle.setFont(self._font(size))
+        self._subtitle.setText(text)
+
     def show_here(self, view: LocationView) -> None:
         """Populate from a location view and show the panel."""
         keep_caught = self.get_keep_caught() if self.get_keep_caught is not None else True
         entries = display_order(view.entries, keep_caught=keep_caught)
         needed = sum(1 for e in view.entries if not e.caught)
-        self._title.setText(view.route.title())
-        self._subtitle.setText(
-            f"{view.region.title()} · {view.period.value.title()} · "
-            f"{season_name(view.season)} · {needed} left"
+        lang = self._lang
+        self._title.setText(display_title(view.route))
+        self._set_subtitle(
+            f"{lang.region(view.region.title())} · {lang.period(view.period.value.title())} · "
+            f"{lang.season(season_name(view.season))} · "
+            f"{lang.text('needed_left', '{n} left', n=needed)}"
         )
         self._ensure_rows(max(1, len(entries)))
         for i, r in enumerate(self._rows):
@@ -319,7 +346,8 @@ class DexPanel(QWidget):
             r0 = self._rows[0]
             self._clear_row_sprite(r0)
             r0["w"].setVisible(True)
-            r0["name"].setText('<span style="color:#9aa0aa;">all caught here!</span>')
+            all_caught = self._lang.text("all_caught", "all caught here!")
+            r0["name"].setText(f'<span style="color:#9aa0aa;">{all_caught}</span>')
             r0["way"].setText("")
         self._fit_list_height()
         # Recompute the outer layouts synchronously too, so the window shrinks to
@@ -412,7 +440,7 @@ class DexPanel(QWidget):
     def _build_profiles(self) -> QWidget:
         active, accounts = self.get_profiles() if self.get_profiles else (None, [])
         w, box = self._popup_window("profiles")
-        head = QLabel("Profiles")
+        head = QLabel(self._lang.text("profiles", "Profiles"))
         head.setFont(self._font(12, bold=True))
         head.setStyleSheet("color: #ffffff;")
         box.addWidget(head)
@@ -427,7 +455,9 @@ class DexPanel(QWidget):
             minus = QPushButton("−")
             minus.setFont(self._font(14, bold=True))
             minus.setCursor(Qt.CursorShape.PointingHandCursor)
-            minus.setToolTip(f"Delete profile '{name}'")
+            minus.setToolTip(
+                self._lang.text("delete_profile_tip", "Delete profile '{name}'", name=name)
+            )
             minus.setFixedWidth(20)
             minus.clicked.connect(lambda _=False, n=name: self._remove_profile(n))
             row.addWidget(sw, 1)
@@ -435,7 +465,7 @@ class DexPanel(QWidget):
             cont = QWidget()
             cont.setLayout(row)
             box.addWidget(cont)
-        new = QPushButton("+  New profile…")
+        new = QPushButton(self._lang.text("new_profile_btn", "+  New profile…"))
         new.setFont(self._font(12))
         new.setCursor(Qt.CursorShape.PointingHandCursor)
         new.setStyleSheet("QPushButton { text-align: left; color: #9aa0aa; }")
@@ -448,15 +478,21 @@ class DexPanel(QWidget):
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("color: rgba(255,255,255,40);")
         box.addWidget(sep)
-        dex_head = QLabel("Dex")
+        dex_head = QLabel(self._lang.text("dex", "Dex"))
         dex_head.setFont(self._font(12, bold=True))
         dex_head.setStyleSheet("color: #ffffff;")
         box.addWidget(dex_head)
         keep = self.get_keep_caught() if self.get_keep_caught is not None else True
-        toggle = QPushButton(("✓  " if keep else "    ") + "Show caught")
+        toggle = QPushButton(
+            ("✓  " if keep else "    ") + self._lang.text("show_caught", "Show caught")
+        )
         toggle.setFont(self._font(12))
         toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        toggle.setToolTip("Keep caught species in the list, checked, at the bottom")
+        toggle.setToolTip(
+            self._lang.text(
+                "tip_show_caught", "Keep caught species in the list, checked, at the bottom"
+            )
+        )
         shade = "#eeeeee" if keep else "#777777"
         toggle.setStyleSheet(f"QPushButton {{ text-align: left; color: {shade}; }}")
         toggle.clicked.connect(self._toggle_keep_caught)
@@ -476,14 +512,22 @@ class DexPanel(QWidget):
 
     def _remove_profile(self, name: str) -> None:
         ok = QMessageBox.question(
-            self, "Delete profile", f"Delete profile '{name}' and its caught list?"
+            self,
+            self._lang.text("delete_profile_title", "Delete profile"),
+            self._lang.text(
+                "delete_profile_q", "Delete profile '{name}' and its caught list?", name=name
+            ),
         )
         if ok == QMessageBox.StandardButton.Yes and self.on_delete_profile is not None:
             self.on_delete_profile(name)
             self._open_profiles()  # rebuild with the updated list
 
     def _create_profile(self) -> None:
-        name, ok = QInputDialog.getText(self, "New profile", "Account name:")
+        name, ok = QInputDialog.getText(
+            self,
+            self._lang.text("new_profile_title", "New profile"),
+            self._lang.text("account_name", "Account name:"),
+        )
         if ok and name.strip() and self.on_create_profile is not None:
             self.on_create_profile(name.strip())
         if self._profiles is not None:
@@ -524,12 +568,12 @@ class DexPanel(QWidget):
 
     def _build_legend(self) -> QWidget:
         w, box = self._popup_window("legend")
-        head = QLabel("Rarity")
+        head = QLabel(self._lang.text("rarity_head", "Rarity"))
         head.setFont(self._font(12, bold=True))
         head.setStyleSheet("color: #ffffff;")
         box.addWidget(head)
         for rarity, color in _RARITY_COLORS:
-            lab = QLabel(f'<span style="color:{color};">● {rarity}</span>')
+            lab = QLabel(f'<span style="color:{color};">● {self._lang.rarity(rarity)}</span>')
             lab.setFont(self._font(12))
             box.addWidget(lab)
         return w
@@ -552,14 +596,14 @@ class DexPanel(QWidget):
     def _build_balls(self) -> QWidget:
         balls, hidden = self.get_ball_state() if self.get_ball_state else ([], set())
         w, box = self._popup_window("balls")
-        head = QLabel("Show balls")
+        head = QLabel(self._lang.text("show_balls", "Show balls"))
         head.setFont(self._font(12, bold=True))
         head.setStyleSheet("color: #ffffff;")
         box.addWidget(head)
         icon_h = self._px(BASE_SPRITE_H)
         for ball_id, ball_name in balls:
             shown = ball_id not in hidden
-            sw = QPushButton(("✓  " if shown else "    ") + ball_name)
+            sw = QPushButton(("✓  " if shown else "    ") + self._lang.ball(ball_name))
             sw.setFont(self._font(12))
             sw.setCursor(Qt.CursorShape.PointingHandCursor)
             sw.setIcon(QIcon(self._loader.ball_pixmap(ball_name, icon_h)))
@@ -569,7 +613,10 @@ class DexPanel(QWidget):
             sw.clicked.connect(lambda _=False, i=ball_id: self._toggle_ball(i))
             box.addWidget(sw)
         row = QHBoxLayout()
-        for text, vis in (("All", True), ("None", False)):
+        for text, vis in (
+            (self._lang.text("all", "All"), True),
+            (self._lang.text("none", "None"), False),
+        ):
             b = QPushButton(text)
             b.setFont(self._font(11))
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -658,7 +705,7 @@ class DexPanel(QWidget):
         self._set_row_sprite(r, entry.id)
         color = rarity_color_hex(entry.rarity)
         r["name"].setText(f'<span style="color:{color};">{entry.name}</span>')
-        way = "/".join(entry.ways)
+        way = "/".join(self._lang.way(w) for w in entry.ways)
         if entry.caught:
             way = (way + " ✓").strip()
         # Elide the way to whatever space remains right of the (full) name, so the

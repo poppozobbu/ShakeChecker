@@ -34,7 +34,8 @@ you walk. Named after the shake checks in the catch formula.
 - Windows 10/11
 - Python 3.11+
 - PokeMMO running in **windowed or borderless** mode (not exclusive fullscreen),
-  client language **English**.
+  client language **English** (French is experimental: `--lang fr`, see
+  [docs/LANGUAGES.md](docs/LANGUAGES.md)).
 
 ## Setup
 

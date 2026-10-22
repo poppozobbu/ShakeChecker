@@ -68,6 +68,14 @@ class DexSession:
         loc = self._data.location_for_key(key)
         return LocationView(loc["name"], loc["region"], period, season, entries)
 
+    def location_is_cave(self, hud_name: str, is_cave_name: Callable[[str], bool]) -> bool:
+        """Whether the HUD location is a cave, decided from the ENGLISH name of the
+        matched data record -- so it works for any HUD language once the name
+        resolves (see EncounterData.hud_matches_all)."""
+        return self._data.hud_matches_all(
+            hud_name, lambda loc: is_cave_name(loc["name"]), self._resolver.region
+        )
+
     def record_caught(self, species_id: int) -> bool:
         """Mark a species OT-caught (call when the OT ball icon is seen). Returns
         True if it was newly recorded, so the caller can log it once."""

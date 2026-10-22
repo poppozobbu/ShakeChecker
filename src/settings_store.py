@@ -2,8 +2,9 @@
 
 Holds which Poke Balls to hide from the catch-rate overlay (stored as a set of
 HIDDEN ball ids, not enabled ones, so a ball added to balls.json later shows by
-default instead of being silently hidden) and the dex-panel mode. Empty file /
-no file means all balls shown and the default dex mode.
+default instead of being silently hidden), the dex-panel mode and the client
+language ("en", "fr", ...). Empty file / no file means all balls shown, the
+default dex mode and English.
 """
 
 from __future__ import annotations
@@ -16,31 +17,45 @@ from pathlib import Path
 # (shown checked, at the bottom) rather than removing them. This is what users
 # expected (see issue #16); False restores the old "hide caught" behaviour.
 DEFAULT_KEEP_CAUGHT = True
+DEFAULT_LANGUAGE = "en"
 
 
 class Settings:
-    def __init__(self, path: Path, hidden_balls: set[str], keep_caught: bool) -> None:
+    def __init__(
+        self,
+        path: Path,
+        hidden_balls: set[str],
+        keep_caught: bool,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> None:
         self.path = path
         self.hidden_balls = hidden_balls
         self.keep_caught = keep_caught
+        self.language = language
 
     @classmethod
     def load(cls, userdata_dir: Path | str) -> Settings:
         path = Path(userdata_dir) / "settings.json"
         hidden: set[str] = set()
         keep_caught = DEFAULT_KEEP_CAUGHT
+        language = DEFAULT_LANGUAGE
         if path.exists():
             try:
                 raw = json.loads(path.read_text("utf-8"))
                 hidden = {str(b) for b in raw.get("hidden_balls", [])}
                 keep_caught = bool(raw.get("keep_caught", DEFAULT_KEEP_CAUGHT))
+                language = str(raw.get("language", DEFAULT_LANGUAGE)).strip().lower()
             except (json.JSONDecodeError, OSError):
                 pass  # corrupt/unreadable -> fall back to defaults
-        return cls(path, hidden, keep_caught)
+        return cls(path, hidden, keep_caught, language or DEFAULT_LANGUAGE)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"hidden_balls": sorted(self.hidden_balls), "keep_caught": self.keep_caught}
+        payload = {
+            "hidden_balls": sorted(self.hidden_balls),
+            "keep_caught": self.keep_caught,
+            "language": self.language,
+        }
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), "utf-8")
 
     def is_ball_visible(self, ball_id: str) -> bool:

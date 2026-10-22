@@ -9,6 +9,7 @@
     ".claude/**",
     ".vscode/**",
     "src/data/*.json",
+    "src/data/lang/*.json",
     "fixtures/**",
     "*.png"
   ],

@@ -11,6 +11,7 @@ the screen; everything can be overridden from the command line:
     python src/app.py --rate 45             # raw base catch rate instead
     python src/app.py --image fixtures/x.png  # offline: analyse one PNG (no overlay)
     python src/app.py --list-windows        # diagnose window detection
+    python src/app.py --lang fr             # French client (remembered; see docs/LANGUAGES.md)
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from battle_logic import (
     is_in_battle,
 )
 from battle_reader import (
+    TEMPLATE_NAMES,
     BattleState,
     BattleTextReader,
     Calibration,
@@ -60,6 +62,7 @@ from dex_session import DexSession, LocationView
 from dex_tracker import EncounterData, select_display
 from game_time import current_game_minute, is_dusk_ball_night, season_name
 from hp_settler import HpSettler
+from lang import LangPack, available_languages, fold_lower, load_lang, pick_templates_dir
 from location_reader import is_cave_location, read_game_clock, read_location
 from name_reader import NameReader
 from overlay import Overlay, scale_for_window
@@ -82,6 +85,7 @@ from window_capture import (
 DATA = paths.DATA_DIR  # bundled, read-only (frozen-aware via paths.py)
 SPECIES_PATH = DATA / "species_core.json"
 TEMPLATES_DIR = DATA / "templates"
+LANG_DIR = DATA / "lang"
 ENCOUNTERS_PATH = DATA / "encounters.json"
 LEGENDARIES_PATH = DATA / "legendaries.json"
 USERDATA = paths.userdata_dir()  # per-account caught lists (%APPDATA% when frozen)
@@ -177,12 +181,26 @@ def load_status_rates() -> dict[str, float]:
     return json.loads((DATA / "status_rates.json").read_text("utf-8"))["rates"]
 
 
-def lookup_species(name: str) -> dict:
+def lookup_species(name: str, lang: LangPack | None = None) -> dict:
+    """Species entry by name (English, or the active language pack's name)."""
     entries = json.loads(SPECIES_PATH.read_text("utf-8"))
+    want = fold_lower(name)
     for e in entries:
-        if e["name"].lower() == name.lower():
-            return e
+        shown = lang.species_name(e["id"], e["name"]) if lang else e["name"]
+        if want in (fold_lower(e["name"]), fold_lower(shown)):
+            return {**e, "name": shown}
     raise SystemExit(f"unknown species: {name!r}")
+
+
+def is_cave(hud_name: str, lang: LangPack | None, dex: DexSession | None) -> bool:
+    """Cave test for the Dusk Ball: the name keywords (English or the language
+    pack's), plus -- for a non-English HUD -- the dex tables, which know the
+    English name of every location the HUD name resolves to."""
+    if is_cave_location(hud_name, lang):
+        return True
+    if lang is None or lang.is_default or dex is None:
+        return False
+    return dex.location_is_cave(hud_name, is_cave_location)
 
 
 def battle_context(
@@ -284,6 +302,7 @@ def analyze_image(
     species_override: dict | None,
     status_override: str | None,
     cal: Calibration,
+    lang: LangPack | None = None,
 ) -> None:
     """Offline mode: run the full pipeline on a single PNG and print the result.
 
@@ -296,7 +315,7 @@ def analyze_image(
         raise SystemExit(f"cannot read image: {image_path!r}")
     status_rates = load_status_rates()
     balls = load_balls()
-    name_reader = None if species_override else NameReader(cal.name, SPECIES_PATH)
+    name_reader = None if species_override else NameReader(cal.name, SPECIES_PATH, lang)
     reading = read_battle(frame, cal)
     print(f"{image_path}")
     print(f"  state: {reading.state.value}  (bars detected: {len(reading.bars)})")
@@ -311,9 +330,9 @@ def analyze_image(
             f"  {tag}{label}  HP {bar.hp_pct:.1f}% ({bar.color.value})  status: {bar.status.value}"
         )
         if reading.state is BattleState.SINGLE and enemy is not None:
-            turn = read_turn_number(frame, cal.chat)
+            turn = read_turn_number(frame, cal.chat, lang)
             turns_completed = turn - 1 if turn else 0
-            dusk = is_cave_location(read_location(frame, cal.location))
+            dusk = is_cave_location(read_location(frame, cal.location, lang), lang)
             ctx = battle_context(enemy, turns_completed=turns_completed, dusk_active=dusk)
             probs = ball_probs(bar.hp_pct, enemy["catch_rate"], status_rates[status], balls, ctx)
             turn_note = f"[turn {turn}] " if turn else "[turn ?] "
@@ -368,7 +387,9 @@ class LiveLoop:
         overlay: Overlay,
         dex: DexSession | None = None,
         dex_panel: DexPanel | None = None,
+        lang: LangPack | None = None,
     ) -> None:
+        self.lang = lang or LangPack()
         self.species_override = species_override
         self.status_override = status_override
         self.cal = cal
@@ -379,9 +400,20 @@ class LiveLoop:
         self.settings = Settings.load(USERDATA)  # which balls the overlay shows
         self.overlay.set_hidden_names(self._hidden_ball_names())
         self.status_rates = load_status_rates()
-        self.name_reader = None if species_override else NameReader(cal.name, SPECIES_PATH)
-        self.battle_text = BattleTextReader(cal.battle_text, TEMPLATES_DIR)
-        self.chat = AsyncChatReader(cal.chat)  # background turn-OCR (correction only)
+        self.name_reader = (
+            None if species_override else NameReader(cal.name, SPECIES_PATH, self.lang)
+        )
+        templates_dir, translated = pick_templates_dir(TEMPLATES_DIR, self.lang, TEMPLATE_NAMES)
+        if not translated:
+            log.warning(
+                f"lang {self.lang.code}: no translated battle-text templates found "
+                f"(data/templates/{self.lang.templates_subdir or self.lang.code}/); using the "
+                "English ones -- the turn counter and catch detection will not work "
+                "(see docs/LANGUAGES.md)"
+            )
+        self.battle_text = BattleTextReader(cal.battle_text, templates_dir)
+        # background turn-OCR (correction only)
+        self.chat = AsyncChatReader(cal.chat, self.lang)
         self.capture = WindowCapture()
 
         self.state = AppState.WAITING
@@ -407,6 +439,7 @@ class LiveLoop:
         self._loc_miss_streak = 0  # consecutive unmatched location reads (debounce hide)
         self._dex_log = ""  # last printed dex panel text (console dedup)
         self._last_hud = ""  # last HUD location seen (to refresh the panel on a toggle)
+        self._unmatched_seen: set[str] = set()  # HUD names already logged as unmatched
         if self.dex_panel is not None and self.dex is not None:
             self.dex_panel.on_toggle_caught = self._dex_toggle_caught
             self.dex_panel.on_select_profile = self._dex_use_profile
@@ -539,7 +572,7 @@ class LiveLoop:
         dex_due = now - self._last_loc_check >= DEX_LOC_INTERVAL_S
         if self.state is AppState.IDLE and self.dex is not None and dex_due:
             self._last_loc_check = now
-            view = self._update_dex(read_location(frame, self.cal.location))
+            view = self._update_dex(read_location(frame, self.cal.location, self.lang))
             action, self._loc_miss_streak = dex_panel_action(
                 view is not None, self._loc_miss_streak, hide_after=DEX_LOC_MISS_HIDE
             )
@@ -588,9 +621,9 @@ class LiveLoop:
         # must NOT drop. Reading once at battle start captures exactly that. Retry
         # until a non-empty name is read (the first battle frame can be mid-transition).
         if not self._loc_read:
-            loc = read_location(frame, self.cal.location)
+            loc = read_location(frame, self.cal.location, self.lang)
             if loc:
-                cave = is_cave_location(loc)
+                cave = is_cave(loc, self.lang, self.dex)
                 night = self._is_night(frame)  # Dusk Ball also boosts at night (locked here)
                 self.dusk_active = cave or night
                 self._loc_read = True
@@ -806,11 +839,27 @@ class LiveLoop:
         view = self.dex.on_location(hud_name)
         if view is not None:
             self._last_hud = hud_name  # remember only locations we could resolve
+        elif not self.lang.is_default:
+            self._log_unmatched_location(hud_name)
         panel = dex_panel_text(view)
         if panel and panel != self._dex_log:
             log.info(panel)
             self._dex_log = panel
         return view
+
+    def _log_unmatched_location(self, hud_name: str) -> None:
+        """Non-English clients: keep a list of the HUD names the dex tables could not
+        resolve (userdata/unmatched_locations.txt), so the missing translations can be
+        added to the language pack (docs/LANGUAGES.md). Each name is written once."""
+        if hud_name in self._unmatched_seen:
+            return
+        self._unmatched_seen.add(hud_name)
+        try:
+            USERDATA.mkdir(parents=True, exist_ok=True)
+            with (USERDATA / "unmatched_locations.txt").open("a", encoding="utf-8") as f:
+                f.write(f"{hud_name}\n")
+        except OSError:
+            pass  # best effort: a diagnostic aid must never break the loop
 
     def _refresh_dex_panel(self) -> None:
         """Re-render the panel for the current location (after a toggle/profile
@@ -876,14 +925,14 @@ class LiveLoop:
         self._refresh_dex_panel()
 
 
-def build_dex(account_override: str | None) -> DexSession | None:
+def build_dex(account_override: str | None, lang: LangPack | None = None) -> DexSession | None:
     """Build the dex session for the active account, or None if the encounter
     data is missing. The active account is chosen manually and remembered: an
     explicit --account wins, else the last used one, else a 'default' profile."""
     if not ENCOUNTERS_PATH.exists():
         log.info("dex: encounters.json not found (run scripts/update_data.py) — dex disabled")
         return None
-    data = EncounterData.load(ENCOUNTERS_PATH, LEGENDARIES_PATH)
+    data = EncounterData.load(ENCOUNTERS_PATH, LEGENDARIES_PATH, lang)
     cfg = AccountConfig.load(USERDATA)
     account = cfg.resolve_active(account_override)
     if account is None:
@@ -916,8 +965,12 @@ def run(
     cal: Calibration,
     account: str | None = None,
     debug: bool = False,
+    lang: LangPack | None = None,
 ) -> None:
     setup_logging(debug)
+    lang = lang or LangPack()
+    if not lang.is_default:
+        log.info(f"language: {lang.code}")
     # Only one instance may run: a second would draw a duplicate overlay over the
     # first (looks like ghosting). Hold the lock for the whole process via `lock`.
     lock = acquire_single_instance()
@@ -937,24 +990,30 @@ def run(
     icon = QIcon(str(paths.DATA_DIR / "shakechecker.ico"))
     app.setWindowIcon(icon)
 
-    overlay = Overlay([b["name"] for b in load_balls()])
-    dex = build_dex(account)
-    dex_panel = DexPanel() if dex is not None else None
-    loop = LiveLoop(species_override, status_override, cal, overlay, dex=dex, dex_panel=dex_panel)
+    overlay = Overlay([b["name"] for b in load_balls()], lang=lang)
+    dex = build_dex(account, lang)
+    dex_panel = DexPanel(lang=lang) if dex is not None else None
+    loop = LiveLoop(
+        species_override, status_override, cal, overlay, dex=dex, dex_panel=dex_panel, lang=lang
+    )
 
     # Tray presence: a windowless build has no taskbar entry, so the tray icon is how
     # the user sees it's running and how they quit it (right-click -> Quit).
     tray = QSystemTrayIcon(icon)
     tray.setToolTip(f"ShakeChecker v{paths.APP_VERSION}")
     menu = QMenu()
-    quit_action = QAction("Quit ShakeChecker", menu)
+    quit_action = QAction(lang.text("quit", "Quit ShakeChecker"), menu)
     quit_action.triggered.connect(app.quit)
     menu.addAction(quit_action)
     tray.setContextMenu(menu)
     tray.show()
     tray.showMessage(
         "ShakeChecker",
-        f"v{paths.APP_VERSION} is running. Right-click the tray icon to quit.",
+        lang.text(
+            "tray_running",
+            "v{version} is running. Right-click the tray icon to quit.",
+            version=paths.APP_VERSION,
+        ),
         QSystemTrayIcon.MessageIcon.Information,
         4000,
     )
@@ -997,6 +1056,11 @@ def main() -> None:
         "defaults to the last used)",
     )
     parser.add_argument(
+        "--lang",
+        choices=available_languages(LANG_DIR),
+        help="PokeMMO client language (remembered; defaults to the last used, else en)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="verbose turn-counter diagnostics (chat reads, menu advances)",
@@ -1007,22 +1071,32 @@ def main() -> None:
         list_windows()
         return
 
+    # Client language: --lang wins and is remembered, else the saved setting, else en.
+    settings = Settings.load(USERDATA)
+    if args.lang and args.lang != settings.language:
+        settings.language = args.lang
+        settings.save()
+    try:
+        lang = load_lang(settings.language, LANG_DIR, USERDATA)
+    except ValueError as exc:
+        raise SystemExit(f"language error: {exc}") from exc
+
     # species is read from the screen by default; --species/--rate override it
     species_override: dict | None = None
     if args.species is not None:
-        species_override = lookup_species(args.species)
+        species_override = lookup_species(args.species, lang)
     elif args.rate is not None:
         species_override = {"name": f"rate {args.rate}", "catch_rate": args.rate, "types": []}
 
     cal = load_calibration(paths.CALIBRATION_PATH)
 
     if args.image:
-        analyze_image(args.image, species_override, args.status, cal)
+        analyze_image(args.image, species_override, args.status, cal, lang)
         return
 
     set_dpi_awareness()
     try:
-        run(species_override, args.status, cal, account=args.account, debug=args.debug)
+        run(species_override, args.status, cal, account=args.account, debug=args.debug, lang=lang)
     except KeyboardInterrupt:
         sys.exit(0)
 

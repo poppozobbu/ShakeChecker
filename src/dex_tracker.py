@@ -17,14 +17,37 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from rapidfuzz import fuzz, process
 
+from lang import LangPack, fold_lower
+
 # Same channel-suffix strip used for the cave heuristic, kept local to avoid a
 # circular import with location_reader.
-_CH_SUFFIX = re.compile(r"\s*ch\.?\s*\d+.*$", re.IGNORECASE)
+# " Ch. 3" channel suffix and everything after it. The OCR reads the channel digits
+# as letters ("Ch. o" for 0, "Ch. l" for 1) and may add a colon/dots, hence the class;
+# the lookahead keeps it from biting into a word such as "Chemin". Same pattern as
+# location_reader (a test keeps the two in step).
+_CH_SUFFIX = re.compile(r"\s*\bch[.:,]*\s*[\dolIiEe|]+(?![a-z]).*$", re.IGNORECASE)
+# The HUD location line is followed by the money line; when the OCR glues them, cut
+# at the currency sign. A "(1F)"/"(Toit)" floor suffix is not part of the zone name.
+_MONEY_TAIL = re.compile(r"\s*[$§].*$")
+_FLOOR_TAIL = re.compile(r"\s*\(.*$")
+# "Route 1l7", "Route 11o": the OCR swaps 1/l/i and 0/o inside route numbers.
+_ROUTE_NUMBER = re.compile(r"\b[a-z]?route\s*([0-9olir|]{1,3})(?![a-z0-9])")
+_DIGIT_LOOKALIKES = str.maketrans("olir|", "01111")
+
+
+def _fix_route_number(m: re.Match[str]) -> str:
+    token = m.group(1)
+    if not any(c.isdigit() for c in token):  # "route ill" is not a number
+        return m.group(0)
+    return f"route {token.translate(_DIGIT_LOOKALIKES)}"
+
+
 # Default fuzzy threshold (rapidfuzz ratio 0-100) for tolerating OCR noise.
 MATCH_THRESHOLD = 82.0
 
@@ -55,10 +78,16 @@ _RARITY_RANK = {
 PAD_RARITIES = frozenset({"Lure", "Rare", "Very Rare"})
 
 
-def _normalize(name: str) -> str:
-    """Lowercase, drop the channel suffix and punctuation, collapse whitespace.
-    'Viridian Forest Ch. 2' / 'VIRIDIAN FOREST' both -> 'viridian forest'."""
-    s = _CH_SUFFIX.sub("", name.strip().lower())
+def _normalize(name: str, ch_suffix: re.Pattern[str] = _CH_SUFFIX) -> str:
+    """Lowercase, fold accents, drop the channel suffix and punctuation, collapse
+    whitespace. 'Viridian Forest Ch. 2' / 'VIRIDIAN FOREST' both -> 'viridian
+    forest'; 'Forêt de Jade' / 'FORET DE JADE' both -> 'foret de jade'. (Folding
+    accents first matters: the OCR drops them, and the punctuation strip below
+    would otherwise turn 'ê' into a space.)"""
+    s = _MONEY_TAIL.sub("", fold_lower(name.strip()))
+    s = ch_suffix.sub("", s)
+    s = _FLOOR_TAIL.sub("", s)
+    s = _ROUTE_NUMBER.sub(_fix_route_number, s)
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -116,16 +145,19 @@ def location_entries(
     season: int,
     caught: set[int],
     legendaries: set[int],
+    name_for: Callable[[int, str], str] | None = None,
 ) -> list[DexEntry]:
     """All non-legendary species available now (caught AND uncaught), deduped by
     id with their encounter ways and headline (rarest) rarity, sorted by dex id.
-    The caught flag lets the display show a to-do list and pad it with rares."""
+    The caught flag lets the display show a to-do list and pad it with rares.
+    `name_for(id, data_name)` translates the display name (language packs)."""
     by_id: dict[int, dict] = {}
     for e in available_here(encounters, period, season):
         pid = e["id"]
         if pid in legendaries:
             continue
-        slot = by_id.setdefault(pid, {"name": e["name"], "ways": set(), "rarities": set()})
+        shown = name_for(pid, e["name"]) if name_for else e["name"]
+        slot = by_id.setdefault(pid, {"name": shown, "ways": set(), "rarities": set()})
         tag = encounter_tag(e["method"], e["rarity"])
         if tag:
             slot["ways"].add(tag)
@@ -183,32 +215,80 @@ class EncounterData:
     """Loads the vendored encounter + legendary data and answers location/missing
     queries. Read-only; safe to share."""
 
-    def __init__(self, locations: dict[str, dict], legendaries: set[int]) -> None:
+    def __init__(
+        self, locations: dict[str, dict], legendaries: set[int], lang: LangPack | None = None
+    ) -> None:
         self._locations = locations
         self._legendaries = legendaries
-        # normalized name -> [keys] (a name can repeat across regions)
+        self._lang = lang or LangPack()
+        self._ch = (
+            re.compile(self._lang.channel_suffix, re.IGNORECASE)
+            if self._lang.channel_suffix
+            else _CH_SUFFIX
+        )
+        # normalized name -> [keys] (a name can repeat across regions). Both the
+        # English data name and the language pack's HUD name resolve to the key, so
+        # a zone the pack doesn't translate (yet) still matches when it shows in English.
         self._by_norm: dict[str, list[str]] = {}
         for key, loc in locations.items():
-            self._by_norm.setdefault(_normalize(loc["name"]), []).append(key)
+            for name in (loc["name"], self._lang.location_name(key, loc["name"])):
+                keys = self._by_norm.setdefault(_normalize(name, self._ch), [])
+                if key not in keys:
+                    keys.append(key)
 
     @classmethod
-    def load(cls, encounters_path: Path | str, legendaries_path: Path | str) -> EncounterData:
+    def load(
+        cls,
+        encounters_path: Path | str,
+        legendaries_path: Path | str,
+        lang: LangPack | None = None,
+    ) -> EncounterData:
         enc = json.loads(Path(encounters_path).read_text("utf-8"))["locations"]
         leg = set(json.loads(Path(legendaries_path).read_text("utf-8"))["ids"])
-        return cls(enc, leg)
+        return cls(enc, leg, lang)
 
     def location_name(self, key: str) -> str:
-        return self._locations[key]["name"]
+        return self._lang.location_name(key, self._locations[key]["name"])
 
     def location_for_key(self, key: str) -> dict:
-        """The full location record (name, region, encounters) for a key."""
-        return self._locations[key]
+        """The full location record (name, region, encounters) for a key; the name
+        is the language pack's display name when there is one."""
+        loc = self._locations[key]
+        if not self._lang.location_names:
+            return loc
+        return {**loc, "name": self._lang.location_name(key, loc["name"])}
+
+    def hud_matches_all(
+        self, hud_name: str, predicate: Callable[[dict], bool], region: str | None = None
+    ) -> bool:
+        """True if the HUD name resolves to at least one location and `predicate`
+        (applied to the raw, English-named record) holds for every candidate. Lets
+        language-independent facts about a place (is it a cave?) be answered from
+        the English data even when the HUD text is in another language."""
+        norm = _normalize(hud_name, self._ch)
+        if not norm:
+            return False
+        keys = self._candidate_keys(norm, region.upper() if region else None)
+        if not keys and region:
+            keys = self._candidate_keys(norm, None)
+        return bool(keys) and all(predicate(self._locations[k]) for k in keys)
 
     def _candidate_keys(self, norm: str, region_u: str | None) -> list[str]:
+        """_match_keys, retried without a leading 1-2 character token: the map icon
+        left of the name is sometimes read as a stray "Yh"."""
+        keys = self._match_keys(norm, region_u)
+        if not keys:
+            head, _, rest = norm.partition(" ")
+            if rest and len(head) <= 2:
+                keys = self._match_keys(rest, region_u)
+        return keys
+
+    def _match_keys(self, norm: str, region_u: str | None) -> list[str]:
         """All location keys matching a normalized name (region-filtered): exact
         normalized matches if any, else the best fuzzy match for OCR noise. The
         number tokens must match exactly so fuzzy can't turn "Route 5" into
-        "Route 35"; only the word part is matched fuzzily."""
+        "Route 35"; only the word part is matched fuzzily, and as a whole string
+        (not a substring) so "Lavandia" never turns into "New Lavandia"."""
 
         def in_region(key: str) -> bool:
             return region_u is None or self._locations[key]["region"].upper() == region_u
@@ -224,7 +304,7 @@ class EncounterData:
         }
         if not candidates:
             return []
-        best = process.extractOne(norm, candidates.keys(), scorer=fuzz.WRatio)
+        best = process.extractOne(norm, candidates.keys(), scorer=fuzz.ratio)
         if best is None or best[1] < MATCH_THRESHOLD:
             return []
         return [k for k in candidates[best[0]] if in_region(k)]
@@ -236,7 +316,7 @@ class EncounterData:
         shared "Route 5" name is unambiguous). Returns None if nothing clears the
         threshold or the name is ambiguous across regions with no usable hint.
         """
-        norm = _normalize(hud_name)
+        norm = _normalize(hud_name, self._ch)
         if not norm:
             return None
         keys = self._candidate_keys(norm, region.upper() if region else None)
@@ -245,7 +325,7 @@ class EncounterData:
     def regions_for_name(self, hud_name: str) -> set[str]:
         """The set of regions a HUD location name could belong to (ignoring any
         hint). A single-element set means the name pins the region down."""
-        norm = _normalize(hud_name)
+        norm = _normalize(hud_name, self._ch)
         if not norm:
             return set()
         return {self._locations[k]["region"] for k in self._candidate_keys(norm, None)}
@@ -255,7 +335,10 @@ class EncounterData:
         loc = self._locations.get(key)
         if loc is None:
             return []
-        return location_entries(loc["encounters"], period, season, caught, self._legendaries)
+        name_for = self._lang.species_name if self._lang.species_names else None
+        return location_entries(
+            loc["encounters"], period, season, caught, self._legendaries, name_for
+        )
 
     def missing_here(self, key: str, period: str, season: int, caught: set[int]) -> list[DexEntry]:
         """Just the uncaught entries (convenience for the dev scripts)."""

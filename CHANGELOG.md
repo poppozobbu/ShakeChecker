@@ -3,6 +3,34 @@
 All notable changes to ShakeChecker are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Language packs (French first)** — `--lang fr` (remembered in
+  `userdata/settings.json`) switches the species names, dex location names and the
+  strings the OCR looks for (level marker, turn line, channel suffix, cave words) to
+  a pack in `src/data/lang/`. Name matching now ignores accents, and
+  `userdata/lang/<code>.json` can override any entry. A non-English run logs HUD
+  locations it cannot match to `userdata/unmatched_locations.txt`. The French pack
+  ships its own battle-text templates and is checked on real captures of a 1920x1080
+  client; the Alpha banner prefix and most zone names are still unchecked — see
+  [docs/LANGUAGES.md](docs/LANGUAGES.md).
+- **Translated overlay and dex panel** — with a language pack, the Poké Ball names, the
+  header lines ("Taux : 45 · Tour 3", "PV : 100%"), status badges, the rarity legend,
+  encounter conditions ("Canne", "Phéno. ombre"), seasons, periods and the panel and
+  tray-menu captions are drawn in the pack's language. The English label stays the
+  internal key, so nothing else changes. Any entry can be overridden in
+  `userdata/lang/<code>.json`. A long subtitle now shrinks to fit the panel.
+- `Fiery Path` now counts as a cave (Dusk Ball), in every language.
+
+### Fixed
+
+- HUD zone matching, in every language: the OCR reading the channel number or route
+  digits as letters (`Ch. o`, `Route 1l7`) no longer defeats the match; a floor suffix
+  such as `(2F)` is ignored; and a zone missing from the data is no longer matched to
+  a look-alike by substring (fuzzy matching now compares whole names).
+
 ## [1.2.0] - 2026-06-21
 
 ### Added

@@ -226,3 +226,41 @@ def test_phys_to_logical_scales_by_dpr(qt_app):
     dpr = qt_app.primaryScreen().devicePixelRatio()
     lx, ly = phys_to_logical(1000, 600)
     assert (lx, ly) == (round(1000 / dpr), round(600 / dpr))
+
+
+def test_french_overlay_labels_but_english_keys(qt_app):
+    """Ball rows are still keyed by the English name (sprites, hiding, ordering);
+    only the drawn text is translated."""
+    from pathlib import Path
+
+    from lang import load_lang
+
+    fr = load_lang("fr", Path(__file__).parent.parent / "src" / "data" / "lang")
+    ov = Overlay(BALLS, lang=fr)
+    ov.show_battle(
+        62,
+        "Tartard",
+        45,
+        3,
+        {"Poké Ball": 0.5, "Great Ball": 0.6, "Quick Ball": 0.8},
+        level=22,
+        status="slp",
+        hp_pct=100,
+    )
+    assert ov._sub.text() == "Taux : 45  ·  Tour 3"
+    assert ov._hp.text() == "PV : 100%"
+    assert "N.22" in ov._name.text()
+    assert ov._status.text() == "SOM"
+    assert ov._ball_name_labels["Great Ball"].text() == "Super Ball"
+    assert ov._ball_name_labels["Quick Ball"].text() == "Rapide Ball"
+    assert set(ov._pct_labels) == set(BALLS)  # keys unchanged
+
+
+def test_english_overlay_is_unchanged_by_the_lang_parameter(qt_app):
+    ov = Overlay(BALLS)
+    ov.show_battle(62, "Poliwrath", 45, 3, {"Poké Ball": 0.5}, level=22, status="slp", hp_pct=100)
+    assert ov._sub.text() == "Rate: 45  ·  Turn 3"
+    assert ov._hp.text() == "HP: 100%"
+    assert "Lv.22" in ov._name.text()
+    assert ov._status.text() == "SLP"
+    assert ov._ball_name_labels["Great Ball"].text() == "Great Ball"

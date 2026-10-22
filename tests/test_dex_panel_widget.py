@@ -172,3 +172,64 @@ def test_popup_closes_when_app_goes_inactive(qt_app):
     # clicking back into the game deactivates the app -> popup closes
     p._on_app_state_changed(Qt.ApplicationState.ApplicationInactive)
     assert not p._balls.isVisible()
+
+
+def _fr():
+    from pathlib import Path
+
+    from lang import load_lang
+
+    return load_lang("fr", Path(__file__).parent.parent / "src" / "data" / "lang")
+
+
+def test_french_panel_header_ways_and_legend(qt_app):
+    p = DexPanel(lang=_fr())
+    entries = [
+        DexEntry(129, "Magicarpe", ("Rod",), "Very Common", False),  # 2+ rods collapse to "Rod"
+        DexEntry(130, "Léviator", ("Super Rod",), "Very Rare", False),
+        DexEntry(63, "Abra", ("Shadow Pheno",), "Special", False),
+    ]
+    p.show_here(LocationView("Route 110", "UNOVA", Period.MORNING, 1, entries))
+    assert p._title.text() == "Route 110"
+    assert p._subtitle.text() == "Unys · Matin · Été · 3 à capturer"
+    # rows are sorted by rarity, so look the ways up by dex id
+    ways = {r["dex"]: r["way"].text() for r in p._rows[:3]}
+    assert ways == {129: "Canne", 130: "Méga Canne", 63: "Phéno. ombre"}
+    legend = p._build_legend()
+    texts = " ".join(lab.text() for lab in legend.findChildren(type(p._title)))
+    assert "Très rare" in texts and "Leurre" in texts and "Rareté" in texts
+
+
+def test_french_all_caught_message(qt_app):
+    p = DexPanel(lang=_fr())
+    p.get_keep_caught = lambda: False
+    p.show_here(LocationView("Route 110", "HOENN", Period.DAY, 1, []))
+    assert "tous capturés ici" in p._rows[0]["name"].text()
+
+
+def test_english_panel_header_is_unchanged(qt_app):
+    p = DexPanel()
+    p.show_here(view([DexEntry(129, "Magikarp", ("Old Rod",), "Common", False)]))
+    assert p._title.text() == "Route 110"
+    assert p._subtitle.text() == "Hoenn · Day · Summer · 1 left"
+
+
+def test_display_title_keeps_translated_casing():
+    from dex_panel import display_title
+
+    assert display_title("ROUTE 110") == "Route 110"
+    assert display_title("VIRIDIAN FOREST") == "Viridian Forest"
+    assert display_title("Forêt de Jade") == "Forêt de Jade"  # not "Forêt De Jade"
+    assert display_title("Tour des Cieux (Toit)") == "Tour des Cieux (Toit)"
+
+
+def test_long_translated_subtitle_shrinks_to_fit(qt_app):
+    p = DexPanel(lang=_fr())
+    p.apply_scale(1.0)
+    p._set_subtitle("Sinnoh · Matin · Printemps · 12 à capturer")
+    from PyQt6.QtGui import QFontMetrics
+
+    width = QFontMetrics(p._subtitle.font()).horizontalAdvance(p._subtitle.text())
+    assert width <= p._panel_w - 2 * 12
+    p._set_subtitle("Kanto · Jour")  # short: keeps the normal size
+    assert p._subtitle.font().pixelSize() == p._px(11)

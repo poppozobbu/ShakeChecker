@@ -619,6 +619,11 @@ def _load_template(path: Path) -> np.ndarray:
     return tpl
 
 
+# The four template images the reader needs; a translated set (a language pack's
+# templates_subdir) must provide all of them, see lang.pick_templates_dir.
+TEMPLATE_NAMES = ("menu_fight.png", "catch_gotcha.png", "action_used.png", "action_go.png")
+
+
 class BattleTextReader:
     """Detect the command menu and the catch banner by TEMPLATE MATCHING, not OCR.
 
@@ -631,13 +636,13 @@ class BattleTextReader:
     def __init__(self, cal: BattleTextCalibration, templates_dir: Path | str) -> None:
         self._cal = cal
         d = Path(templates_dir)
-        self._menu_tpl = _load_template(d / "menu_fight.png")
-        self._catch_tpl = _load_template(d / "catch_gotcha.png")
+        self._menu_tpl = _load_template(d / TEMPLATE_NAMES[0])
+        self._catch_tpl = _load_template(d / TEMPLATE_NAMES[1])
         # A committed action shows one of these: "X used Y!" (attack/item, and the
         # enemy's counter), or "Go! Y!" (sending a Pokemon on a switch).
         self._action_tpls = [
-            _load_template(d / "action_used.png"),
-            _load_template(d / "action_go.png"),
+            _load_template(d / TEMPLATE_NAMES[2]),
+            _load_template(d / TEMPLATE_NAMES[3]),
         ]
 
     def read(self, frame_bgr: np.ndarray) -> BattleText:

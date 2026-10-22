@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from lang import LangPack
 from sprite_loader import SpriteLoader
 
 # Base (scale 1.0) sizes in logical px. apply_scale() multiplies these; 1.0 is the
@@ -76,11 +77,13 @@ def prob_color_hex(prob: float) -> str:
     return _GREEN
 
 
-def subheader_text(catch_rate: int | None, turn: int) -> str:
+def subheader_text(catch_rate: int | None, turn: int, lang: LangPack | None = None) -> str:
     # catch_rate is None for species with no known rate (e.g. roaming Latias/
     # Latios/Mesprit/Cresselia): show it as a mystery "??".
     rate = "??" if catch_rate is None else str(catch_rate)
-    return f"Rate: {rate}  ·  Turn {turn}"
+    return (lang or LangPack()).text(
+        "rate_line", "Rate: {rate}  ·  Turn {turn}", rate=rate, turn=turn
+    )
 
 
 def scale_for_window(height_px: int) -> float:
@@ -98,9 +101,16 @@ _STATUS_BADGE = {
 }
 
 
-def status_badge(status: str | None) -> tuple[str, str] | None:
-    """(label, background colour) for a status, or None for no status (-> hidden)."""
-    return _STATUS_BADGE.get(status.lower()) if status else None
+def status_badge(status: str | None, lang: LangPack | None = None) -> tuple[str, str] | None:
+    """(label, background colour) for a status, or None for no status (-> hidden).
+    A language pack may rename the label ("ui": {"status_slp": "SOM"})."""
+    if not status:
+        return None
+    badge = _STATUS_BADGE.get(status.lower())
+    if badge is None or lang is None:
+        return badge
+    label, bg = badge
+    return lang.text(f"status_{status.lower()}", label), bg
 
 
 def phys_to_logical(px: int, py: int) -> tuple[int, int]:
@@ -135,8 +145,14 @@ def unknown_ball_order(ball_names: list[str], hidden: set[str]) -> list[str]:
 
 
 class Overlay(QWidget):
-    def __init__(self, ball_names: list[str], loader: SpriteLoader | None = None) -> None:
+    def __init__(
+        self,
+        ball_names: list[str],
+        loader: SpriteLoader | None = None,
+        lang: LangPack | None = None,
+    ) -> None:
         super().__init__()
+        self._lang = lang or LangPack()
         self._loader = loader or SpriteLoader()
         self._movie: QMovie | None = None
         self._current_dex: int | None = None  # avoid restarting the GIF every frame
@@ -200,7 +216,7 @@ class Overlay(QWidget):
         self._header.addWidget(self._status)
         self._col.addLayout(self._header)
 
-        self._sub = QLabel(subheader_text(0, 1))
+        self._sub = QLabel(subheader_text(0, 1, self._lang))
         self._sub.setStyleSheet("color: #aaaaaa;")
         self._sub.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._col.addWidget(self._sub)
@@ -222,7 +238,7 @@ class Overlay(QWidget):
             row = QHBoxLayout(roww)
             row.setContentsMargins(0, 0, 0, 0)
             icon = QLabel()
-            label = QLabel(name)
+            label = QLabel(self._lang.ball(name))  # `name` stays the key (sprite, rows)
             label.setStyleSheet("color: #cfd2d6;")
             pct = QLabel("—")
             pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -314,14 +330,19 @@ class Overlay(QWidget):
         unknown = catch_rate is None
         self._set_sprite(dex_id)
         self._alpha_glow.setEnabled(alpha)  # red aura marks an Alpha Pokémon
+        level_tag = self._lang.text("level_tag", "Lv.{level}", level=level)
         lvl = (
-            f' <span style="font-size:{self._level_px}px; color:#9aa0aa;">Lv.{level}</span>'
+            f' <span style="font-size:{self._level_px}px; color:#9aa0aa;">{level_tag}</span>'
             if level
             else ""
         )
         self._name.setText(f"{name}{lvl}")
-        self._sub.setText(subheader_text(catch_rate, turn))
-        self._hp.setText(f"HP: {hp_pct:.0f}%" if hp_pct is not None else "")
+        self._sub.setText(subheader_text(catch_rate, turn, self._lang))
+        self._hp.setText(
+            self._lang.text("hp_line", "HP: {pct}%", pct=f"{hp_pct:.0f}")
+            if hp_pct is not None
+            else ""
+        )
         self._set_status(status)
         for ball, label in self._pct_labels.items():
             if unknown:
@@ -409,7 +430,7 @@ class Overlay(QWidget):
         return f
 
     def _set_status(self, status: str | None) -> None:
-        badge = status_badge(status)
+        badge = status_badge(status, self._lang)
         if badge is None:
             self._status.setVisible(False)
             return

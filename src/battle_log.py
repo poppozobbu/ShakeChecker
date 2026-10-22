@@ -21,13 +21,21 @@ import cv2
 import numpy as np
 
 from battle_reader import ChatCalibration
+from lang import LangPack
 from ocr_engine import run_ocr_lines, sorted_ocr_lines
 
 # "Turn 2 started!" — tolerate OCR spacing/case noise.
 _TURN = re.compile(r"turn\s*(\d{1,3})\s*start", re.IGNORECASE)
 
 
-def parse_turn_number(texts: list[str]) -> int | None:
+def turn_pattern(lang: LangPack | None) -> re.Pattern[str]:
+    """The chat turn-line regex (group 1 = the number): English, or the pack's."""
+    if lang is None or not lang.turn_pattern:
+        return _TURN
+    return re.compile(lang.turn_pattern, re.IGNORECASE)
+
+
+def parse_turn_number(texts: list[str], pattern: re.Pattern[str] = _TURN) -> int | None:
     """Turn number from the BOTTOMMOST "Turn N started" line, or None.
 
     `texts` must be ordered top-to-bottom (the chat is chronological: oldest line
@@ -38,12 +46,14 @@ def parse_turn_number(texts: list[str]) -> int | None:
     is also the highest -- same result.)"""
     found: int | None = None
     for line in texts:
-        for m in _TURN.finditer(line):
+        for m in pattern.finditer(line):
             found = int(m.group(1))  # a later (lower) line overrides -> bottommost wins
     return found
 
 
-def read_turn_number(frame_bgr: np.ndarray, cal: ChatCalibration) -> int | None:
+def read_turn_number(
+    frame_bgr: np.ndarray, cal: ChatCalibration, lang: LangPack | None = None
+) -> int | None:
     """Current turn number (1-based) from the chat, or None if not readable."""
     h, w = frame_bgr.shape[:2]
     x0, x1 = cal.crop_x(w)
@@ -51,7 +61,7 @@ def read_turn_number(frame_bgr: np.ndarray, cal: ChatCalibration) -> int | None:
     if crop.size == 0:
         return None
     up = cv2.resize(crop, None, fx=cal.upscale, fy=cal.upscale, interpolation=cv2.INTER_CUBIC)
-    return parse_turn_number(run_ocr_lines(up))
+    return parse_turn_number(run_ocr_lines(up), turn_pattern(lang))
 
 
 class AsyncChatReader:
@@ -60,8 +70,9 @@ class AsyncChatReader:
     finished turn (or None). Uses its own OCR engine to avoid contending with the
     main thread's name/location OCR."""
 
-    def __init__(self, cal: ChatCalibration) -> None:
+    def __init__(self, cal: ChatCalibration, lang: LangPack | None = None) -> None:
         self._cal = cal
+        self._pattern = turn_pattern(lang)
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chat-ocr")
         self._future: Future[int | None] | None = None
         self._ocr: Any = None  # lazily created RapidOCR (untyped third-party)
@@ -111,4 +122,4 @@ class AsyncChatReader:
             crop, None, fx=self._cal.upscale, fy=self._cal.upscale, interpolation=cv2.INTER_CUBIC
         )
         result, _ = self._ocr(up)
-        return parse_turn_number(sorted_ocr_lines(result))
+        return parse_turn_number(sorted_ocr_lines(result), self._pattern)

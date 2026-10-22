@@ -1,9 +1,10 @@
 """Read the enemy species name via OCR and resolve it to a species entry.
 
 OCR output is never trusted directly: the level marker and trailing icons are
-stripped and the remainder is fuzzy-matched (rapidfuzz) against the English
-species list from species_core.json. The OCR engine is loaded lazily so this
-module (and the pure matching logic) imports cheaply for tests.
+stripped and the remainder is fuzzy-matched (rapidfuzz) against the species list
+from species_core.json (English names, or the names of a LangPack keyed by the
+same ids). Matching ignores case and accents. The OCR engine is loaded lazily so
+this module (and the pure matching logic) imports cheaply for tests.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import numpy as np
 from rapidfuzz import fuzz, process
 
 from battle_reader import BarReading, NameCalibration
+from lang import LangPack, fold_lower
 from ocr_engine import run_ocr
 
 # Cut the OCR string at the level marker ("Lv", "Lu", "Iv" misreads) so only
@@ -36,19 +38,30 @@ ALPHA_CATCH_RATE = 10
 _ALPHA_PREFIX = "alpha "
 
 
-def clean_ocr_text(raw: str) -> str:
-    return _LEVEL_MARKER.split(raw, maxsplit=1)[0].strip()
+def _level_patterns(lang: LangPack | None) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """(marker, marker + number) regexes: the English ones, or the pack's marker."""
+    if lang is None or not lang.level_marker:
+        return _LEVEL_MARKER, _LEVEL_NUMBER
+    marker = lang.level_marker
+    return (
+        re.compile(marker, re.IGNORECASE),
+        re.compile(marker + r"\.?\s*(\d{1,3})", re.IGNORECASE),
+    )
 
 
-def strip_alpha_prefix(raw: str) -> tuple[bool, str]:
+def clean_ocr_text(raw: str, marker: re.Pattern[str] = _LEVEL_MARKER) -> str:
+    return marker.split(raw, maxsplit=1)[0].strip()
+
+
+def strip_alpha_prefix(raw: str, prefix: str = _ALPHA_PREFIX) -> tuple[bool, str]:
     """Detect and remove the leading "Alpha " marker from an OCR'd name banner.
 
     Returns (is_alpha, text_without_prefix). Stripping before the species match
     keeps the fuzzy matcher resolving the base species ("Alpha Noctowl" ->
     "Noctowl"); the flag drives the fixed Alpha catch rate."""
     lead = raw.lstrip()
-    if lead[: len(_ALPHA_PREFIX)].lower() == _ALPHA_PREFIX:
-        return True, lead[len(_ALPHA_PREFIX) :].lstrip()
+    if lead[: len(prefix)].lower() == prefix:
+        return True, lead[len(prefix) :].lstrip()
     return False, raw
 
 
@@ -77,17 +90,23 @@ def detect_gender(crop_bgr: np.ndarray, cal: NameCalibration) -> str:
     return FEMALE if frac >= cal.gender_pink_frac else MALE
 
 
-def parse_level(raw: str) -> int | None:
-    m = _LEVEL_NUMBER.search(raw)
+def parse_level(raw: str, number: re.Pattern[str] = _LEVEL_NUMBER) -> int | None:
+    m = number.search(raw)
     return int(m.group(1)) if m else None
 
 
-def match_species_name(raw_text: str, names: list[str], min_score: float) -> str | None:
-    """Best species name for an OCR string, or None below `min_score`."""
-    candidate = clean_ocr_text(raw_text)
+def match_species_name(
+    raw_text: str,
+    names: list[str],
+    min_score: float,
+    marker: re.Pattern[str] = _LEVEL_MARKER,
+) -> str | None:
+    """Best species name for an OCR string, or None below `min_score`. Case and
+    accents are ignored on both sides (the OCR often drops them)."""
+    candidate = clean_ocr_text(raw_text, marker)
     if not candidate:
         return None
-    match = process.extractOne(candidate, names, scorer=fuzz.WRatio, processor=str.lower)
+    match = process.extractOne(candidate, names, scorer=fuzz.WRatio, processor=fold_lower)
     if match is None:
         return None
     name, score, _ = match
@@ -98,11 +117,20 @@ class NameReader:
     """Crops the name region, OCRs it and resolves it to a species dict
     ({id, name, catch_rate, ...} from species_core.json)."""
 
-    def __init__(self, cal: NameCalibration, species_path: Path | str) -> None:
+    def __init__(
+        self, cal: NameCalibration, species_path: Path | str, lang: LangPack | None = None
+    ) -> None:
         self._cal = cal
         species = json.loads(Path(species_path).read_text("utf-8"))
+        if lang is not None and lang.species_names:
+            # Same ids, translated names: everything downstream keeps keying on the
+            # id; only the matched/displayed name changes.
+            species = [{**s, "name": lang.species_name(s["id"], s["name"])} for s in species]
         self._names = [s["name"] for s in species]
         self._by_name = {s["name"]: s for s in species}
+        self._marker, self._number = _level_patterns(lang)
+        alpha = lang.alpha_prefix if lang is not None else None
+        self._alpha_prefix = alpha.lower() if alpha else _ALPHA_PREFIX
 
     def read(self, frame_bgr: np.ndarray, bar: BarReading) -> dict | None:
         """Species dict (plus the encounter's "level") for the enemy whose bar
@@ -120,8 +148,8 @@ class NameReader:
         raw = " ".join(run_ocr(up))
         # An Alpha banner reads "Alpha <Species>"; strip the marker before the
         # match so the base species resolves, and remember it for the rate below.
-        is_alpha, match_text = strip_alpha_prefix(raw)
-        name = match_species_name(match_text, self._names, c.min_match_score)
+        is_alpha, match_text = strip_alpha_prefix(raw, self._alpha_prefix)
+        name = match_species_name(match_text, self._names, c.min_match_score, self._marker)
         if not name:
             return None
         # OCR loses the ♂/♀ glyph, so a gender-split species (Nidoran) always
@@ -131,7 +159,7 @@ class NameReader:
             variant = base + detect_gender(crop, c)
             if variant in self._by_name:
                 name = variant
-        result = {**self._by_name[name], "level": parse_level(raw)}
+        result = {**self._by_name[name], "level": parse_level(raw, self._number)}
         if is_alpha:
             # All alphas catch at a fixed rate of 10. Keep the base name/id/sprite/
             # dex and just flag it -- the overlay marks alphas with a red sprite
