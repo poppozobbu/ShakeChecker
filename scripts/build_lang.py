@@ -136,7 +136,10 @@ VERIFIED: dict[str, set[str]] = {
 
 # Names PokeAPI lacks that are certain from the other regions' data.
 MANUAL_LOCATIONS: dict[str, dict[str, str]] = {
-    "fr": {"JOHTO_VICTORY_ROAD": "Route Victoire"},
+    "fr": {
+        "JOHTO_VICTORY_ROAD": "Route Victoire",
+        "HOENN_DEWFORD_TOWN": "Village Myokara",  # seen on the HUD (PokeAPI: "Myokara")
+    },
 }
 
 
@@ -274,8 +277,8 @@ def main() -> None:
             "prints them as in English (the English names are indexed too); the others "
             "must be added from the HUD text",
             "level_marker": _state(code, "level_marker", "confirm on a name banner"),
-            "alpha_prefix": "null = English 'Alpha ' -- NOT checked: needs a screenshot of "
-            "an Alpha banner",
+            "alpha_prefix": "the English 'Alpha ' prefix, confirmed by the player on the "
+            "PokeMMO French client",
             "turn_pattern": _state(code, "turn_pattern", "confirm with the chat turn line"),
             "channel_suffix": _state(code, "channel_suffix", "confirm on the HUD location line"),
             "ui_strings": "hand-translated (way_names, rarity_names, period_names, "

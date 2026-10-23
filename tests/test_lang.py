@@ -422,6 +422,14 @@ def test_channel_suffix_patterns_stay_in_step():
         ("PokeMMO Route 110 Ch. Eo $188 878  jeudi, 19:41 Eté", "Route 110"),
         ("PokeMMO Chemin Ardent Ch. 3", "Chemin Ardent"),  # "Ch" inside a word is kept
         ("PokeMMO Charbourg Ch. 2", "Charbourg"),
+        # the OCR sometimes drops the space before "Ch."
+        ("PokeMMO Route 113Ch.2 o", "Route 113"),
+        ("PokeMMO Route112Ch.2 0", "Route112"),
+        ("PokeMMO VergazonCh.3", "Vergazon"),
+        ("PokeMMO Clementi-villeCh3", "Clementi-ville"),
+        ("PokeMMO Route110ch。1 o$241206", "Route110"),  # full-width full stop
+        ("PokeMMO Lac Roche", "Lac Roche"),  # a word ending in "che" is not a suffix
+        ("PokeMMO Mont ChimneeCh.3 a", "Mont Chimnee"),
     ],
 )
 def test_hud_line_noise_is_cut_after_the_name(raw: str, cleaned: str):
@@ -438,6 +446,15 @@ def test_hud_line_noise_is_cut_after_the_name(raw: str, cleaned: str):
         ("Route 1ll", "HOENN_ROUTE_111"),
         ("Route 1i1", "HOENN_ROUTE_111"),
         ("Route 1il", "HOENN_ROUTE_111"),
+        ("Route lll", "HOENN_ROUTE_111"),
+        ("Route iii'", "HOENN_ROUTE_111"),
+        ("Route l1lCh.i o$188878 vendredi,04:59 Eté", "HOENN_ROUTE_111"),
+        ("Route 113Ch.2 o", "HOENN_ROUTE_113"),
+        ("Route112ch.3 o", "HOENN_ROUTE_112"),
+        ("Route 117ch.3 0S228406 0/1 mardi.10:58 Eté", "HOENN_ROUTE_117"),
+        ("Route117ch3", "HOENN_ROUTE_117"),
+        ("Sentier SinurocCh. 3 e", "HOENN_JAGGED_PASS"),
+        ("villageMyokarach.3 S228406 0/1 Ete mardi, 11:03", "HOENN_DEWFORD_TOWN"),
         ("Route11r", "HOENN_ROUTE_111"),
         ("MRoutei11", "HOENN_ROUTE_111"),
         ("Route1io C", "HOENN_ROUTE_110"),

@@ -31,7 +31,10 @@ from lang import LangPack, fold_lower
 # as letters ("Ch. o" for 0, "Ch. l" for 1) and may add a colon/dots, hence the class;
 # the lookahead keeps it from biting into a word such as "Chemin". Same pattern as
 # location_reader (a test keeps the two in step).
-_CH_SUFFIX = re.compile(r"\s*\bch[.:,]*\s*[\dolIiEe|]+(?![a-z]).*$", re.IGNORECASE)
+_CH_SUFFIX = re.compile(
+    r"\s*(?:(?<![a-z])ch[.:。,]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+))(?![a-z]).*$",
+    re.IGNORECASE,
+)
 # The HUD location line is followed by the money line; when the OCR glues them, cut
 # at the currency sign. A "(1F)"/"(Toit)" floor suffix is not part of the zone name.
 _MONEY_TAIL = re.compile(r"\s*[$§].*$")
@@ -43,8 +46,10 @@ _DIGIT_LOOKALIKES = str.maketrans("olir|", "01111")
 
 def _fix_route_number(m: re.Match[str]) -> str:
     token = m.group(1)
-    if not any(c.isdigit() for c in token):  # "route ill" is not a number
-        return m.group(0)
+    if not any(c.isdigit() for c in token):
+        if len(token) == 3 and set(token) <= set("li|"):  # "Route lll": only 111 fits
+            return "route 111"
+        return m.group(0)  # "route ill" is not a number
     return f"route {token.translate(_DIGIT_LOOKALIKES)}"
 
 

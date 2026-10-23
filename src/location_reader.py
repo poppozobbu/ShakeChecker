@@ -21,7 +21,10 @@ from ocr_engine import run_ocr
 
 # Drops the " Ch. N" channel suffix (and any trailing noise) from the HUD line.
 # Same pattern as dex_tracker._CH_SUFFIX (see there); a test keeps them in step.
-_CH_SUFFIX = re.compile(r"\s*\bch[.:,]*\s*[\dolIiEe|]+(?![a-z]).*$", re.IGNORECASE)
+_CH_SUFFIX = re.compile(
+    r"\s*(?:(?<![a-z])ch[.:。,]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+))(?![a-z]).*$",
+    re.IGNORECASE,
+)
 _MONEY_TAIL = re.compile(r"\s*[$§].*$")
 # The location crop spans from the very top, so a full-window capture (fixtures
 # and live alike) picks up the "PokeMMO" window-title text before the HUD name.
