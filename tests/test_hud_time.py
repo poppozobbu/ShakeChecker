@@ -34,8 +34,16 @@ CLOCKS = {
 @pytest.mark.parametrize(("name", "hm"), CLOCKS.items())
 def test_reads_hud_clock(name, hm):
     img = cv2.imread(str(ROOT / "fixtures" / name))
-    minute = read_game_clock(img, CAL.hud_time)
+    minute = read_game_clock(img, CAL.hud_time, CAL.hud_time_legacy)
     assert minute == hm[0] * 60 + hm[1]
+
+
+def test_reads_the_clock_on_the_second_line_of_the_current_hud():
+    # French client, current HUD: "Route 34 INTÉRIEUR · CH 3" / "Sat 07:33 · Automne ·
+    # Beau temps" (only the top-left HUD kept; the rest of the capture is blanked).
+    img = cv2.imread(str(ROOT / "fixtures" / "fr" / "fr_hud_nouveau_format.png"))
+    assert read_game_clock(img, CAL.hud_time, CAL.hud_time_legacy) == 7 * 60 + 33
+    assert read_game_clock(img, CAL.hud_time) == 7 * 60 + 33  # no legacy band needed
 
 
 def test_dusk_ball_night_window_is_the_strict_night_period():

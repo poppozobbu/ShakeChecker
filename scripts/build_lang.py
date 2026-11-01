@@ -139,6 +139,7 @@ MANUAL_LOCATIONS: dict[str, dict[str, str]] = {
     "fr": {
         "JOHTO_VICTORY_ROAD": "Route Victoire",
         "HOENN_DEWFORD_TOWN": "Village Myokara",  # seen on the HUD (PokeAPI: "Myokara")
+        "HOENN_AQUA_HIDEOUT": "Planque Aqua",  # seen on the HUD (PokeAPI has no name)
     },
 }
 

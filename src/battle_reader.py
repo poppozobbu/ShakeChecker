@@ -239,6 +239,7 @@ class Calibration(BaseModel):
     trainer: TrainerCalibration
     location: LocationCalibration
     hud_time: LocationCalibration  # same top-left HUD crop shape, for the clock line
+    hud_time_legacy: LocationCalibration | None = None  # where older clients put it
     caught_icon: CaughtIconCalibration
 
 
@@ -611,9 +612,16 @@ def read_caught_icon(frame_bgr: np.ndarray, bar: BarReading, cal: CaughtIconCali
 
 def _load_template(path: Path) -> np.ndarray:
     """Load a grayscale template, raising a clear error if the PNG is missing
-    (cv2.imread returns None rather than raising). Narrowing away the None here
+    (cv2 returns None rather than raising). Narrowing away the None here
     also lets every _match() call see a non-optional array."""
-    tpl = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    # cv2.imread cannot open a path with non-ASCII characters on Windows (an install
+    # under "Téléchargements", a user name with an accent...) and just returns None,
+    # so read the bytes ourselves and decode them.
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        data = np.empty(0, dtype=np.uint8)
+    tpl = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE) if data.size else None
     if tpl is None:
         raise FileNotFoundError(f"missing battle-text template: {path}")
     return tpl

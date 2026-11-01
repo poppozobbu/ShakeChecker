@@ -32,25 +32,37 @@ from lang import LangPack, fold_lower
 # the lookahead keeps it from biting into a word such as "Chemin". Same pattern as
 # location_reader (a test keeps the two in step).
 _CH_SUFFIX = re.compile(
-    r"\s*(?:(?<![a-z])ch[.:。,]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+))(?![a-z]).*$",
+    r"\s*(?:(?<![a-z])ch[.:。,=f]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+)|(?<![a-z])gh[.:。,]+\s*[\dolIiEe|]+)(?![a-z]).*$",
     re.IGNORECASE,
 )
 # The HUD location line is followed by the money line; when the OCR glues them, cut
-# at the currency sign. A "(1F)"/"(Toit)" floor suffix is not part of the zone name.
+# at the currency sign. A "(1F)"/"(Toit)" floor mark is not part of the zone name.
 _MONEY_TAIL = re.compile(r"\s*[$§].*$")
-_FLOOR_TAIL = re.compile(r"\s*\(.*$")
+_FLOOR_GROUP = re.compile(r"\s*\([^)]*(?:\)|$)")
 # "Route 1l7", "Route 11o": the OCR swaps 1/l/i and 0/o inside route numbers.
-_ROUTE_NUMBER = re.compile(r"\b[a-z]?route\s*([0-9olir|]{1,3})(?![a-z0-9])")
-_DIGIT_LOOKALIKES = str.maketrans("olir|", "01111")
+_ROUTE_NUMBER = re.compile(r"\b[a-z]?r[o0]ute\s*([0-9olirg|]{1,3})(?![a-z0-9])")
+_DIGIT_LOOKALIKES = str.maketrans("olirg|", "011191")
 
 
 def _fix_route_number(m: re.Match[str]) -> str:
     token = m.group(1)
-    if not any(c.isdigit() for c in token):
-        if len(token) == 3 and set(token) <= set("li|"):  # "Route lll": only 111 fits
-            return "route 111"
-        return m.group(0)  # "route ill" is not a number
+    # "Route lio" (all look-alikes) is read as digits too: a number that is not a
+    # real route simply matches nothing later.
+    if not any(c.isdigit() for c in token) and len(token) != 3:
+        return m.group(0)
     return f"route {token.translate(_DIGIT_LOOKALIKES)}"
+
+
+# The newer HUD prints a kind of place after the name ("Ecorcia CITY", "Route 33
+# ROUTE", "Bois aux Chenes UNDERGROUND", "New Lavandia INTERIEUR"). Names are matched
+# as printed first; these only serve the retry without the tag.
+_OUTDOOR_TAIL = re.compile(r"\s+(?:city|route|underground)\b.*$")
+_INDOOR_TAIL = re.compile(r"\s+u?i?nterieur\w*\b.*$")
+# An indoor place (INTERIEUR) is never the town or the route outside it.
+_OUTDOOR_KEY = re.compile(r"_(?:CITY|TOWN)$|_ROUTE_\d+$")
+_ROUTE_FROM = re.compile(r"\b(?:route|chenal) \d{1,3}\b.*$")  # "RedPoppy Route 32"
+_DUP_DIGIT = re.compile(r"^(.*\b\d{1,3}) \d$")  # "route 118 3": a stray channel digit
+_STRAY_LETTER = re.compile(r"^(.*\S) [a-z]$")  # "planque aqua a"
 
 
 # Default fuzzy threshold (rapidfuzz ratio 0-100) for tolerating OCR noise.
@@ -91,10 +103,14 @@ def _normalize(name: str, ch_suffix: re.Pattern[str] = _CH_SUFFIX) -> str:
     would otherwise turn 'ê' into a space.)"""
     s = _MONEY_TAIL.sub("", fold_lower(name.strip()))
     s = ch_suffix.sub("", s)
-    s = _FLOOR_TAIL.sub("", s)
+    s = _FLOOR_GROUP.sub("", s)
     s = _ROUTE_NUMBER.sub(_fix_route_number, s)
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _sorted_words(norm: str) -> str:
+    return " ".join(sorted(norm.split()))
 
 
 def _digits(name: str) -> tuple[str, ...]:
@@ -240,6 +256,13 @@ class EncounterData:
                 keys = self._by_norm.setdefault(_normalize(name, self._ch), [])
                 if key not in keys:
                     keys.append(key)
+        # The same names with their words sorted: a two-line HUD name can come out of
+        # the OCR in the wrong order ("Chenes Bois aux" for "Bois aux Chenes").
+        self._by_sorted: dict[str, list[str]] = {}
+        for norm, keys in self._by_norm.items():
+            if " " in norm:
+                bucket = self._by_sorted.setdefault(_sorted_words(norm), [])
+                bucket.extend(k for k in keys if k not in bucket)
 
     @classmethod
     def load(
@@ -279,32 +302,72 @@ class EncounterData:
         return bool(keys) and all(predicate(self._locations[k]) for k in keys)
 
     def _candidate_keys(self, norm: str, region_u: str | None) -> list[str]:
-        """_match_keys, retried without a leading 1-2 character token: the map icon
-        left of the name is sometimes read as a stray "Yh"."""
-        keys = self._match_keys(norm, region_u)
-        if not keys:
-            head, _, rest = norm.partition(" ")
-            if rest and len(head) <= 2:
-                keys = self._match_keys(rest, region_u)
-        return keys
+        """_match_keys on the name as read, then on cleaned-up forms of it: the OCR
+        adds a stray "Yh" map icon before the name, the HUD a place-kind tag after it
+        ("Ecorcia CITY") and sometimes a loose channel digit ("Route 118 3")."""
+        for form, indoor in self._retry_forms(norm):
+            keys = self._match_keys(form, region_u)
+            if indoor:
+                keys = [k for k in keys if not _OUTDOOR_KEY.search(k)]
+            if keys:
+                return keys
+        return []
+
+    @staticmethod
+    def _retry_forms(norm: str) -> list[tuple[str, bool]]:
+        """(form, indoor) in the order they are tried; `indoor` marks a form that lost
+        an INTERIEUR tag, which must not resolve to the town or route outside."""
+        forms: list[tuple[str, bool]] = [(norm, False)]
+
+        def add(form: str, indoor: bool = False) -> None:
+            if form and (form, indoor) not in forms:
+                forms.append((form, indoor))
+
+        def trimmed(base: str, indoor: bool) -> None:
+            add(base, indoor)
+            head, _, rest = base.partition(" ")
+            if rest and len(head) <= 2:  # the map icon read as "Yh"
+                add(rest, indoor)
+            m = _ROUTE_FROM.search(base)
+            if m and m.start() > 0:  # a player name in front of "Route 32"
+                add(base[m.start() :], indoor)
+            for pat in (_DUP_DIGIT, _STRAY_LETTER):
+                m2 = pat.match(base)
+                if m2:
+                    add(m2.group(1), indoor)
+
+        trimmed(norm, False)
+        if norm.isdigit() and len(norm) >= 2:  # the "Route" word lost: "119"
+            add(f"route {norm}")
+        for tail, indoor in ((_OUTDOOR_TAIL, False), (_INDOOR_TAIL, True)):
+            stripped = tail.sub("", norm)
+            if stripped != norm:
+                trimmed(stripped, indoor)
+        return forms
 
     def _match_keys(self, norm: str, region_u: str | None) -> list[str]:
         """All location keys matching a normalized name (region-filtered): exact
-        normalized matches if any, else the best fuzzy match for OCR noise. The
-        number tokens must match exactly so fuzzy can't turn "Route 5" into
-        "Route 35"; only the word part is matched fuzzily, and as a whole string
-        (not a substring) so "Lavandia" never turns into "New Lavandia"."""
+        normalized matches if any, else the best fuzzy match for OCR noise, else the
+        same with the words in any order. The number tokens must match exactly so
+        fuzzy can't turn "Route 5" into "Route 35"; only the word part is matched
+        fuzzily, and as a whole string (not a substring) so "Lavandia" never turns
+        into "New Lavandia"."""
+        keys = self._match_in(self._by_norm, norm, region_u)
+        if not keys and " " in norm:
+            keys = self._match_in(self._by_sorted, _sorted_words(norm), region_u)
+        return keys
 
+    def _match_in(self, table: dict[str, list[str]], norm: str, region_u: str | None) -> list[str]:
         def in_region(key: str) -> bool:
             return region_u is None or self._locations[key]["region"].upper() == region_u
 
-        exact = [k for k in self._by_norm.get(norm, []) if in_region(k)]
+        exact = [k for k in table.get(norm, []) if in_region(k)]
         if exact:
             return exact
         qd = _digits(norm)
         candidates = {
             n: keys
-            for n, keys in self._by_norm.items()
+            for n, keys in table.items()
             if _digits(n) == qd and any(in_region(k) for k in keys)
         }
         if not candidates:

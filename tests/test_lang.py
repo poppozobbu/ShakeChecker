@@ -398,6 +398,13 @@ def test_french_hud_location_to_dex_and_cave(
     assert found is cave
 
 
+def test_current_hud_layout_names_the_place_kind(fr: LangPack, fr_data: EncounterData):
+    # "Route 34 INTÉRIEUR · CH 3": a building on Route 34, not the route itself.
+    name = read_location(_frame("fr_hud_nouveau_format.png"), CAL.location, fr)
+    assert name.lower().startswith("route 34")
+    assert fr_data.match_location(name) is None
+
+
 def test_alpha_intro_frame_hud_and_chat(fr: LangPack, fr_data: EncounterData):
     img = _frame("fr_alpha_intro.png")
     name = read_location(img, CAL.location, fr)
@@ -587,3 +594,51 @@ def test_status_badge_label_is_translated(fr: LangPack):
     assert status_badge("brn", fr)[0] == "BRU"
     assert status_badge(None, fr) is None
     assert status_badge("unknown", fr) is None
+
+
+def test_templates_load_from_a_non_ascii_install_path(tmp_path: Path):
+    """cv2.imread returns None for such a path on Windows (an install under
+    "Téléchargements"), which used to crash the start with "missing template"."""
+    import shutil
+
+    folder = tmp_path / "Téléchargements" / "Shake Checker é"
+    folder.mkdir(parents=True)
+    src = Path(__file__).resolve().parent.parent / "src" / "data" / "templates"
+    for name in TEMPLATE_NAMES:
+        shutil.copy(src / name, folder / name)
+    BattleTextReader(CAL.battle_text, folder)  # must not raise
+    with pytest.raises(FileNotFoundError):
+        BattleTextReader(CAL.battle_text, folder / "missing")
+
+
+@pytest.mark.parametrize(
+    ("hud", "key"),
+    [
+        ("Ecorcia CITY :", "JOHTO_AZALEA_TOWN"),  # the HUD names the kind of place
+        ("Ecordia CITY -", "JOHTO_AZALEA_TOWN"),
+        ("Route 33 ROUTE ·CH 1RECHREIZX Fri21:30  Automne Cloudy", "JOHTO_ROUTE_33"),
+        ("Route 32 2 ROUTE", "JOHTO_ROUTE_32"),  # a loose channel digit
+        ("RedPoppy Route 32", "JOHTO_ROUTE_32"),  # a player name in front
+        ("Route 118 3", "HOENN_ROUTE_118"),
+        ("Chenal 128 8", "HOENN_ROUTE_128"),
+        ("R0ute119", "HOENN_ROUTE_119"),
+        ("Route 11g", "HOENN_ROUTE_119"),
+        ("Route lio", "HOENN_ROUTE_110"),
+        ("Route 121 Gh. 3 o", "HOENN_ROUTE_121"),
+        ("119", "HOENN_ROUTE_119"),  # the word "Route" lost
+        ("Mauville Ch=2 0", "JOHTO_VIOLET_CITY"),
+        ("Jumelles (RDC) Caves UNDERGROUND ·", "JOHTO_UNION_CAVE"),  # two lines, reordered
+        ("RAMOLOSS (Ss2) Puits UNDERGROUND·", "JOHTO_SLOWPOKE_WELL"),
+        ("Chénes Bois aux UNDERGROUND ·", "JOHTO_ILEX_FOREST"),
+        ("h Planque Aq ua", "HOENN_AQUA_HIDEOUT"),
+        ("Planque Aqua a", "HOENN_AQUA_HIDEOUT"),
+        ("New Lavandia Unterieuri", "HOENN_NEW_MAUVILLE"),  # an indoor area with its own data
+    ],
+)
+def test_newer_hud_layout_and_ocr_noise(fr_data: EncounterData, hud: str, key: str):
+    assert fr_data.match_location(hud) == key
+
+
+@pytest.mark.parametrize("hud", ["Ecorcia INTERIEUR :", "Route 32 INTERIEUR ·", "UNDERGROUND·"])
+def test_indoors_is_not_the_town_or_route_outside(fr_data: EncounterData, hud: str):
+    assert fr_data.match_location(hud) is None

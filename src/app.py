@@ -309,8 +309,12 @@ def analyze_image(
     Lets you verify reader + probabilities + output format without the live
     game (same code path the live loop uses)."""
     import cv2
+    import numpy as np
 
-    frame = cv2.imread(image_path)
+    try:  # not cv2.imread: it cannot open non-ASCII paths on Windows
+        frame = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except OSError:
+        frame = None
     if frame is None:
         raise SystemExit(f"cannot read image: {image_path!r}")
     status_rates = load_status_rates()
@@ -826,7 +830,7 @@ class LiveLoop:
         """Is it within the Dusk Ball night window (21:00-07:59 game time)? Reads
         the HUD clock the player sees; falls back to the deterministic UTC game
         time if the clock can't be read."""
-        minute = read_game_clock(frame, self.cal.hud_time)
+        minute = read_game_clock(frame, self.cal.hud_time, self.cal.hud_time_legacy)
         if minute is None:
             minute = current_game_minute()
         return is_dusk_ball_night(minute)

@@ -22,7 +22,7 @@ from ocr_engine import run_ocr
 # Drops the " Ch. N" channel suffix (and any trailing noise) from the HUD line.
 # Same pattern as dex_tracker._CH_SUFFIX (see there); a test keeps them in step.
 _CH_SUFFIX = re.compile(
-    r"\s*(?:(?<![a-z])ch[.:。,]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+))(?![a-z]).*$",
+    r"\s*(?:(?<![a-z])ch[.:。,=f]*\s*[\dolIiEe|]+|ch(?:[.:。,]+\s*[\dolIiEe|]+|\s*\d+)|(?<![a-z])gh[.:。,]+\s*[\dolIiEe|]+)(?![a-z]).*$",
     re.IGNORECASE,
 )
 _MONEY_TAIL = re.compile(r"\s*[$§].*$")
@@ -100,13 +100,29 @@ def read_location(
 _CLOCK = re.compile(r"\b([01]?\d|2[0-3])\s*[:.]\s*([0-5]\d)\b")
 
 
-def read_game_clock(frame_bgr: np.ndarray, cal: LocationCalibration) -> int | None:
+def read_game_clock(
+    frame_bgr: np.ndarray,
+    cal: LocationCalibration,
+    legacy: LocationCalibration | None = None,
+) -> int | None:
     """In-game minute-of-day (0..1439) from the top-left HUD clock, or None.
 
-    Reads the displayed game time directly (e.g. "Saturday, 22:41" -> 22*60+41)
-    so the Dusk Ball night check uses exactly what the player sees, rather than a
-    computed clock. Used as the primary source; callers fall back to the
-    deterministic UTC time if this returns None (HUD hidden / unreadable)."""
+    Reads the displayed game time directly (e.g. "Sat 22:41" -> 22*60+41) so the
+    Dusk Ball night check uses exactly what the player sees, rather than a computed
+    clock. Used as the primary source; callers fall back to the deterministic UTC
+    time if this returns None (HUD hidden / unreadable). The clock sits on the
+    second HUD line in the current client; `legacy` is where older clients put it,
+    tried when the first band holds no clock."""
+    for band in (cal, legacy):
+        if band is None:
+            continue
+        minute = _read_clock_band(frame_bgr, band)
+        if minute is not None:
+            return minute
+    return None
+
+
+def _read_clock_band(frame_bgr: np.ndarray, cal: LocationCalibration) -> int | None:
     h, w = frame_bgr.shape[:2]
     crop = frame_bgr[int(h * cal.top) : int(h * cal.bottom), int(w * cal.left) : int(w * cal.right)]
     if crop.size == 0:

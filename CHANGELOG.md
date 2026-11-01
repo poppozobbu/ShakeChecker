@@ -29,7 +29,15 @@ All notable changes to ShakeChecker are documented here. This project follows
 - HUD zone matching, in every language: the OCR reading the channel number or route
   digits as letters (`Ch. o`, `Route 1l7`) no longer defeats the match; a floor suffix
   such as `(2F)` is ignored; and a zone missing from the data is no longer matched to
-  a look-alike by substring (fuzzy matching now compares whole names).
+  a look-alike by substring (fuzzy matching now compares whole names). The channel
+  suffix is also found when the space before it is missing (`Route 113Ch.2`), and the
+  newer HUD's place-kind tag (`Ecorcia CITY`, `Route 33 ROUTE`), loose channel digit
+  (`Route 118 3`), mid-name floor mark and reordered two-line names are tolerated.
+- The HUD clock is found on the second HUD line of the current PokeMMO client
+  (`[hud_time]`); the older position is kept as `[hud_time_legacy]` and tried second.
+  Without it the Dusk Ball night check fell back to the computed game time.
+- Battle-text templates and `--image` captures load from an install path with
+  accents (`C:\Users\Zoë\Téléchargements`); `cv2.imread` returned nothing for it.
 
 ## [1.2.0] - 2026-06-21
 

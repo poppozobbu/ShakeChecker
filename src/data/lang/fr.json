@@ -1,9 +1,8 @@
 {
  "_status": {
   "species_names": "PokeAPI, 668/720 species; the 52 left out are PokeMMO event monsters with no official name",
-  "location_names": "PokeAPI game names, 295/310 locations -- NOT yet checked against the PokeMMO HUD; zones the client shows differently are listed in userdata/unmatched_locations.txt while playing",
+  "location_names": "PokeAPI game names, 296/310 locations -- NOT yet checked against the PokeMMO HUD; zones the client shows differently are listed in userdata/unmatched_locations.txt while playing",
   "location_names_missing": [
-   "HOENN_AQUA_HIDEOUT",
    "JOHTO_ROUTE_26",
    "JOHTO_ROUTE_27",
    "JOHTO_ROUTE_28",
@@ -1012,7 +1011,8 @@
   "UNOVA_UNDELLA_TOWN": "Vaguelone",
   "UNOVA_VICTORY_ROAD": "Route Victoire",
   "UNOVA_VILLAGE_BRIDGE": "Pont du Hameau",
-  "UNOVA_WELLSPRING_CAVE": "Veine Souterraine"
+  "UNOVA_WELLSPRING_CAVE": "Veine Souterraine",
+  "HOENN_AQUA_HIDEOUT": "Planque Aqua"
  },
  "way_names": {
   "Water": "Eau",
